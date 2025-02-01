@@ -1,3 +1,11 @@
+# Version check
+if (!([version]$PSVersionTable.PSVersion -ge [version]'7.0.0')) {
+  Write-Warning "This script REQUIRES features enabled by Powershell v7 or later"
+  Write-Host "Install Powershell v7 by running 'winget install Microsoft.Powershell' in your local powershell"
+  Start-Sleep -Seconds 10
+  throw "Powershell needs to be version 7 or greater to run this script"
+}
+
 # Lets collect some system info
 [int]$script:totalCores = ([System.Environment]::ProcessorCount | Out-String).Trim()
 $is64Bit = [System.Environment]::Is64BitOperatingSystem

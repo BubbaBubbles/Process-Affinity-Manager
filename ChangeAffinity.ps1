@@ -69,7 +69,7 @@ function Get-UserSelectValues {
       $range = $_.split("-") | ForEach-Object { [int]$_ }
       $range  = $range[0]..$range[1]
       $range | ForEach-Object {
-        $selectList.Add($_)
+        $selectList.Add([int]$_)
       }
     }
   }
@@ -101,9 +101,6 @@ function Get-UserInput {
 
 function Get-ManualProcess {
   param(
-    [ValidateScript(
-      {($_ -match '.+')}
-    )]
     [string] $find
   )
 

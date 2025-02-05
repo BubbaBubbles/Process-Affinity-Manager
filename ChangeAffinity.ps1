@@ -63,7 +63,7 @@ function Get-UserSelectValues {
   $selectList = New-Object System.Collections.Generic.List[System.Object]
   switch -Regex ($userSelectArray) {
     '^[0-9]+$' {
-      $selectList.Add($_) ; continue
+      $selectList.Add([int]$_) ; continue
     }
     '^[0-9]+-[0-9]+$' {
       $range = $_.split("-") | ForEach-Object { [int]$_ }

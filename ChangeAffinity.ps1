@@ -48,6 +48,43 @@ $defaultDetReadableCore = {
 }
 
 # Lets make some functions for user interactability
+function Get-UserSelectValues {
+  param(
+    [Parameter(Mandatory)]
+    [ValidateScript(
+      {
+        $_ | ForEach-Object {
+          (($_ -match '^[0-9]+$') -or ($_ -match '^[0-9]+-[0-9]+$'))
+        }
+      }
+    )]
+    $userSelectArray
+  )
+  $selectList = New-Object System.Collections.Generic.List[System.Object]
+  switch -Regex ($userSelectArray) {
+    '^[0-9]+$' {
+      $selectList.Add($_) ; continue
+    }
+    '^[0-9]+-[0-9]+$' {
+      $range = $_.split("-") | ForEach-Object { [int]$_ }
+      $range  = $range[0]..$range[1]
+      $range | ForEach-Object {
+        $selectList.Add($_)
+      }
+    }
+  }
+  $selectList = $selectList | Sort-Object | Get-Unique
+  foreach ($item in $selectList) {
+    if (($item -ge $script:totalCores) -or ($item -lt 0)) {
+      throw "Input is larger than the amount of cores available on the system, input cannot be negative"
+    }
+    [string] $step1 = ('1' + ('0' * $item)).Trim()
+    [string] $step2 = '0b' + (($step1 | Out-String).PadLeft(64, '0'))
+    $selectAffinityValue = [long]$selectAffinityValue + [long]$step2
+  }
+  return $selectAffinityValue
+}
+
 function Get-UserInput {
   try {
     Write-Host "Input: " -ForegroundColor DarkCyan -BackgroundColor Black -NoNewline
@@ -99,15 +136,16 @@ function Get-ManualProcess {
     }
     Invoke-Command -ScriptBlock $detection
     Write-Host " "
-    Write-Host "Type in the low-end int value of the CPU affinity range you would like to set:" -ForegroundColor DarkGreen -BackgroundColor Black
-    [int] $lowValue = Get-UserInput
-    Write-Host " "
-    Write-Host "Type in the high-end int value of the CPU affinity range you would like to set:" -ForegroundColor DarkGreen -BackgroundColor Black
-    [int] $highValue = Get-UserInput
-    Set-ProcessAffinity -lowUserCore $lowValue -highUserCore $highValue -process $findings
+    Write-Host "To change affinity, type in the cpu threads you would like the process(es) to be put on" -ForegroundColor DarkGreen -BackgroundColor Black
+    Write-Host "You may type a comma seperated list, and include ranges with dashes, i.e. '0,10-15,31' (hint, they start at 0)" -ForegroundColor DarkGreen -BackgroundColor Black
+    $userSelection = Get-UserInput
+    $userSelectArray = $userSelection -split ","
+    $affinityValue = Get-UserSelectValues -userSelectArray $userSelectArray
+    Set-ProcessAffinity -derivedAffinity $affinityValue -process $findings
   } catch {
     Write-Warning "Cannot find specified process/error occurred"
     Write-Error $_.Exception.Message
+    Start-Sleep -Seconds 3
     Get-InitialInput
   }
 }
@@ -115,23 +153,11 @@ function Get-ManualProcess {
 function Set-ProcessAffinity {
   param(
     [Parameter(Mandatory)]
-    [ValidateScript(
-      {($_ -match '^[0-9]+$') -and ($_ -lt $script:totalCores) -and ($_ -ge 0)}
-    )]
-    [int] $lowUserCore,
-    [Parameter(Mandatory)]
-    [ValidateScript(
-      {($_ -match '^[0-9]+$') -and ($_ -lt $script:totalCores) -and ($_ -ge 0)}
-    )]
-    [int] $highUserCore,
+    $derivedAffinity,
     [Parameter(Mandatory)]
     $process
   )
 
-  $affinityNumber = '0' * $lowUserCore
-  [string] $affinityNumber = ('1' + ('1' * ($highUserCore - $lowUserCore)) + $affinityNumber)
-  $affinityNumber = '0b' + ($affinityNumber | Out-String).PadLeft(64, '0')
-  
   $detectedAffinity = {
     foreach ($item in $process) {
       [readableCore][long]$item.ProcessorAffinity
@@ -141,9 +167,10 @@ function Set-ProcessAffinity {
   Write-Host "Original:" -ForegroundColor Magenta -BackgroundColor Black
   Write-Host "$($process | Out-String)"
   Invoke-Command -ScriptBlock $detectedAffinity
+  
   try {
     foreach ($item in $process) {
-      [long]$item.ProcessorAffinity = [long]$affinityNumber
+      [long]$item.ProcessorAffinity = [long]$derivedAffinity
     }
     Write-Host " "
     Write-Host " "
@@ -170,66 +197,42 @@ function Get-InitialInput {
   Write-Host " "
   Write-Host " "
   Write-Host "You can now change the affinity of the detected processes, or manually specify a process to match by name"
-  Write-Host "To change affinity, type the low-end CPU number of the affinity range you would like to set (hint, they start at 0)" -ForegroundColor DarkGreen -BackgroundColor Black
+  Write-Host "To change affinity, type in the cpu threads you would like the process(es) to be put on" -ForegroundColor DarkGreen -BackgroundColor Black
+  Write-Host "You may type a comma seperated list, and include ranges with dashes, i.e. '0,10-15,31' (hint, they start at 0)" -ForegroundColor DarkGreen -BackgroundColor Black
   Write-Host "To manually specify a process to match by name, type 'manual'" -ForegroundColor DarkGreen -BackgroundColor Black
   Write-Host "To cancel, type exit" -ForegroundColor DarkGreen -BackgroundColor Black
   $initialInput = Get-UserInput
-  switch ($true) {
-    ($initialInput -eq 'exit') {
+  switch ($initialInput) {
+    { $_ -eq 'exit' } {
       Write-Output "User requested exit, exitting"
-      exit
+      exit 
     }
-    ($initialInput -eq 'manual') {
+    { $_ -eq 'manual' } {
       Get-ManualProcess
       exit
     }
-    (($initialInput -match '^[0-9]+$') -and ([int]$initialInput -lt $script:totalCores) -and ([int]$initialInput -ge 0) -and ($defaultDet)) {
+    { ($_ -notmatch '[^0-9,-]') -and ($defaultDet) } {
       try {
-        [int] $lowValue = $initialInput
-        Write-Host " "
-        Write-Host "Type in the high-end int value of the CPU affinity range you would like to set:" -ForegroundColor DarkGreen -BackgroundColor Black
-        [int] $highValue = Get-UserInput
-        Set-ProcessAffinity -lowUserCore $lowValue -highUserCore $highValue -process $defaultDet
+        $userSelectArray = $_ -split ","
+        $affinityValue = Get-UserSelectValues -userSelectArray $userSelectArray
+        Set-ProcessAffinity -process $defaultDet -derivedAffinity $affinityValue
         exit
       } catch {
-        Write-Warning "An error occurred"
         Write-Error $_.Exception.Message
-        Start-Sleep -Seconds 3
         Get-InitialInput
         exit
       }
     }
-    ($true) {
-      if (!($initialInput -match '^[0-9]+$')) {
-        try {
-          Get-ManualProcess -find $initialInput
-          exit
-        } catch {
-          Write-Warning "An error occurred"
-          Write-Error $_.Exception.Message
-          Get-InitialInput
-          exit
-        }
-      }
-      if (!$defaultDet) {
-        Get-ManualProcess
-        exit
-      }
+    default {
       try {
-        [int] $lowValue = $initialInput
-        Write-Host " "
-        Write-Host "Type in the high-end int value of the CPU affinity range you would like to set:" -ForegroundColor DarkGreen -BackgroundColor Black
-        [int] $highValue = Get-UserInput
-        Set-ProcessAffinity -lowUserCore $lowValue -highUserCore $highValue -process $defaultDet
+        Get-ManualProcess -find $_
         exit
       } catch {
-        Write-Warning "An error occurred"
         Write-Error $_.Exception.Message
         Start-Sleep -Seconds 3
         Get-InitialInput
         exit
       }
-      exit
     }
   }
 }
